@@ -7,6 +7,9 @@ import (
 	"log"
 	"os"
 	"strings"
+	"strconv"
+	"net/http"
+	"net/url"
 )
 
 type Problem struct {
@@ -18,11 +21,15 @@ type Problem struct {
 }
 
 func (p *Problem) String() string {
-	return p.url + ",tags=" + strings.Join(p.tags, "|") + ",name=" + p.name
+	return fmt.Sprintf("%s,accepted=%d,submission=%d,name=%s,tags=%s",
+		p.url, p.accepted, p.submission, p.name, strings.Join(p.tags, "|"));
 }
 
-var baseUrl = "http://codeforces.com/problemset/page/"
-var pageNum = 34
+const (
+	codeforces = "http://codeforces.com"
+	problemset = codeforces + "/problemset/page/"
+	pageNum = 1
+)
 
 func parseProblem(p *goquery.Selection) Problem {
 	// name and link
@@ -38,8 +45,52 @@ func parseProblem(p *goquery.Selection) Problem {
 		}
 	})
 
-	// TODO(yangshuguo): AC ratio
-	return Problem{name, strings.TrimSpace(link), tags, 0, 0}
+	accepted, _ := strconv.Atoi(strings.TrimSpace(p.Children().Eq(3).Find("a").Text())[1:])
+	statusLink, _ := p.Children().Eq(3).Find("a").Attr("href")
+	submission := fetchSubmissionStatus(codeforces + statusLink)
+	return Problem{name, strings.TrimSpace(link), tags, accepted, submission}
+}
+
+func fetchSubmissionStatus(statusUrl string) int {
+	response, err := http.Get(statusUrl)
+	doc, err := goquery.NewDocumentFromResponse(response)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(statusUrl)
+	fmt.Println("## 11 PageSize:" + doc.Find("div.pagination span.page-index").Last().Text())
+	csrf_token, _ := doc.Find("form.status-filter input[name='csrf_token']").Attr("value")
+	frameProblemIndex, _ := doc.Find("form.status-filter input[name='frameProblemIndex']").Attr("value")
+	tta, _ := doc.Find("form.status-filter input[name='_tta']").Attr("value")
+
+	data := url.Values {
+		"csrf_token" : { csrf_token },
+		"action" : {"setupSubmissionFilter"},
+		"frameProblemIndex" : { frameProblemIndex },
+		"verdictName" : {"anyVerdict"},
+		"programTypeForInvoker" : { "anyProgramTypeForInvoker" },
+		"comparisonType" : {"NOT_USED"},
+		"judgedTestCount" : {},
+		"_tta" : { tta },
+	}
+	fmt.Println(data)
+	response, err = http.PostForm(statusUrl, data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("statusCode=" + response.Status)
+
+	response, err = http.Get(statusUrl)
+
+	doc, err = goquery.NewDocumentFromResponse(response)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("## 22 PageSize:" + doc.Find("div.pagination span.page-index").Last().Text())
+
+	os.Exit(1)
+	return 0
 }
 
 func fetchUrl(url string, pch chan Problem, finished chan int) {
@@ -62,8 +113,9 @@ func write(pch chan Problem, finished chan int) {
 	var count = pageNum
 	for {
 		select {
-		case p := <-pch:
-			fmt.Println(fmt.Sprintf("%d, %s", i, p.String()))
+		case <-pch:
+		//case p := <-pch:
+			//fmt.Println(strconv.Itoa(i) + p.String())
 			i++
 		case <-finished:
 			count--
@@ -88,8 +140,8 @@ func main() {
 	var finished = make(chan int)
 	defer close(finished)
 
-	for i := 0; i < pageNum; i++ {
-		go fetchUrl(fmt.Sprintf("%s%d", baseUrl, i), pch, finished)
+	for i := 1; i <= pageNum; i++ {
+		go fetchUrl(problemset + strconv.Itoa(i), pch, finished)
 	}
 
 	write(pch, finished)
