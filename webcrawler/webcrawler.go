@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"log"
-	"os"
-	"strings"
-	"strconv"
+	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
+	"strings"
 )
 
 type Problem struct {
@@ -22,13 +23,13 @@ type Problem struct {
 
 func (p *Problem) String() string {
 	return fmt.Sprintf("%s,accepted=%d,submission=%d,name=%s,tags=%s",
-		p.url, p.accepted, p.submission, p.name, strings.Join(p.tags, "|"));
+		p.url, p.accepted, p.submission, p.name, strings.Join(p.tags, "|"))
 }
 
 const (
 	codeforces = "http://codeforces.com"
 	problemset = codeforces + "/problemset/page/"
-	pageNum = 1
+	pageNum    = 1
 )
 
 func parseProblem(p *goquery.Selection) Problem {
@@ -51,6 +52,30 @@ func parseProblem(p *goquery.Selection) Problem {
 	return Problem{name, strings.TrimSpace(link), tags, accepted, submission}
 }
 
+func codeforcesHashCode(cookie string) int {
+	var hashcode = 0
+	for i := 0; i < len(cookie); i++ {
+		hashcode = (hashcode + (i+1)*(i+2)*(int)(cookie[i])) % 1009
+		if i%3 == 0 {
+			hashcode++
+		}
+		if i%2 == 0 {
+			hashcode *= 2
+		}
+		if i > 0 {
+			hashcode -= (int)(math.Floor(float64(cookie[int(math.Floor(float64(i)/2))]/
+				2))) * (hashcode % 5)
+		}
+		for hashcode < 0 {
+			hashcode += 1009
+		}
+		for hashcode >= 1009 {
+			hashcode -= 1009
+		}
+	}
+	return hashcode
+}
+
 func fetchSubmissionStatus(statusUrl string) int {
 	response, err := http.Get(statusUrl)
 	doc, err := goquery.NewDocumentFromResponse(response)
@@ -58,36 +83,58 @@ func fetchSubmissionStatus(statusUrl string) int {
 		log.Fatal(err)
 	}
 
+	var cookie_seed string
+	for _, cookie := range response.Cookies() {
+		if (*cookie).Name == "39ce7" {
+			cookie_seed = (*cookie).Value
+		}
+	}
+
+	fmt.Println(response.Cookies())
 	fmt.Println(statusUrl)
 	fmt.Println("## 11 PageSize:" + doc.Find("div.pagination span.page-index").Last().Text())
 	csrf_token, _ := doc.Find("form.status-filter input[name='csrf_token']").Attr("value")
 	frameProblemIndex, _ := doc.Find("form.status-filter input[name='frameProblemIndex']").Attr("value")
-	tta, _ := doc.Find("form.status-filter input[name='_tta']").Attr("value")
+	tta := codeforcesHashCode(cookie_seed)
 
-	data := url.Values {
-		"csrf_token" : { csrf_token },
-		"action" : {"setupSubmissionFilter"},
-		"frameProblemIndex" : { frameProblemIndex },
-		"verdictName" : {"anyVerdict"},
-		"programTypeForInvoker" : { "anyProgramTypeForInvoker" },
-		"comparisonType" : {"NOT_USED"},
-		"judgedTestCount" : {},
-		"_tta" : { tta },
+	data := url.Values{
+		"csrf_token":            {csrf_token},
+		"action":                {"setupSubmissionFilter"},
+		"frameProblemIndex":     {frameProblemIndex},
+		"verdictName":           {"anyVerdict"},
+		"programTypeForInvoker": {"anyProgramTypeForInvoker"},
+		"comparisonType":        {"NOT_USED"},
+		"judgedTestCount":       {},
+		"_tta":                  {strconv.Itoa(tta)},
 	}
 	fmt.Println(data)
+
 	response, err = http.PostForm(statusUrl, data)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("statusCode=" + response.Status)
-
-	response, err = http.Get(statusUrl)
-
+	fmt.Println("post statusCode=" + response.Status)
 	doc, err = goquery.NewDocumentFromResponse(response)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("## 22 PageSize:" + doc.Find("div.pagination span.page-index").Last().Text())
+
+	//client := http.Client{}
+	//request, err := http.NewRequest("POST", statusUrl, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//
+	////request.Header.Add("Cookie", cookies)
+	//
+	//response, err = client.Do(request)
+
+	//response, err = http.PostForm(statusUrl, data)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//doc, err = goquery.NewDocumentFromResponse(response)
+	//fmt.Println(doc.Html())
+	//fmt.Println("\n\n @@@@@@@@@@@@@@@@@")
+
+	response, err = http.Get(statusUrl)
 
 	os.Exit(1)
 	return 0
@@ -114,7 +161,7 @@ func write(pch chan Problem, finished chan int) {
 	for {
 		select {
 		case <-pch:
-		//case p := <-pch:
+			//case p := <-pch:
 			//fmt.Println(strconv.Itoa(i) + p.String())
 			i++
 		case <-finished:
@@ -141,7 +188,7 @@ func main() {
 	defer close(finished)
 
 	for i := 1; i <= pageNum; i++ {
-		go fetchUrl(problemset + strconv.Itoa(i), pch, finished)
+		go fetchUrl(problemset+strconv.Itoa(i), pch, finished)
 	}
 
 	write(pch, finished)
